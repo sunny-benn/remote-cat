@@ -62,8 +62,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  /* Allocate a 64KB buffer */
   constexpr std::size_t kBufSize = 64 * 1024;
   std::vector<std::byte> buf(kBufSize);
+  /* Track emitted bytes */
   std::uint64_t emitted = 0;
 
   for (;;) {

@@ -10,6 +10,9 @@
 
 namespace remcat {
 
+// Forward decl for TFTP backend factory (defined in backends/tftp_source.cpp)
+std::unique_ptr<ISource> make_tftp_source(const ParsedUrl& u, const FetchOptions& options);
+
 namespace {
 class FileSource final : public ISource {
 public:
@@ -39,11 +42,13 @@ private:
 };
 }
 
-std::unique_ptr<ISource> open_url(std::string_view url, const FetchOptions& /*options*/) {
+std::unique_ptr<ISource> open_url(std::string_view url, const FetchOptions& options) {
   ParsedUrl u = parse_url(url);
   try {
     if (u.scheme.empty() || u.scheme == "file") {
       return std::make_unique<FileSource>(u.path);
+    } else if (u.scheme == "tftp") {
+      return make_tftp_source(u, options);
     }
   } catch (...) {
     return nullptr;
