@@ -36,10 +36,10 @@ static uint16_t be16(const unsigned char* p) {
 class TftpSource final : public ISource {
 public:
   TftpSource(std::string host, uint16_t port, std::string path,
-             const FetchOptions& )
-      : host_(std::move(host)), port_(port), path_(std::move(path)) {
+             const FetchOptions& opts)
+      : host_(std::move(host)), port_(port), path_(std::move(path)), quiet_(opts.quiet) {
     open_socket();
-    start_rrq();
+    start_rrq(true);
   }
 
   ~TftpSource() override {
@@ -99,6 +99,9 @@ private:
       if (sock_ < 0) continue;
       std::memcpy(&server_addr_, p->ai_addr, p->ai_addrlen);
       server_addr_len_ = p->ai_addrlen;
+      // Save the initial well-known address (host:port, usually 69) for RRQ
+      std::memcpy(&server_addr_init_, p->ai_addr, p->ai_addrlen);
+      server_addr_init_len_ = p->ai_addrlen;
       break;
     }
     freeaddrinfo(res);
@@ -109,18 +112,31 @@ private:
 
   }
 
-  void start_rrq() {
-    /* Build RRQ packet with basic options: blksize 512 */
+  void start_rrq(bool with_options) {
+    /* Build RRQ packet; when with_options, request blksize and tsize */
     rfc::OptionMap opts;
-    opts.emplace_back("blksize", "512");
+    if (with_options) {
+      opts.emplace_back("blksize", "512");
+      opts.emplace_back("tsize", "0");
+    }
     auto pkt = rfc::encode_rrq(path_, "octet", opts);
 
-    /* Send to initial well-known port (server_addr_ already has it) */
+    if (!quiet_) {
+      std::fprintf(stderr, "TFTP: sending RRQ for '%s' %s\n", path_.c_str(), with_options ? "(with options)" : "(plain)");
+    }
+
+    /* Reset to initial well-known port and clear TID before (re)starting */
+    server_addr_ = server_addr_init_;
+    server_addr_len_ = server_addr_init_len_;
+    have_tid_ = false;
+
+    /* Send to initial well-known port */
     send_to_server(pkt);
 
     awaiting_first_ = true;
     next_block_ = 1;
     blksize_ = 512;
+    rrq_with_options_ = with_options;
   }
 
   bool recv_next_block() {
@@ -193,7 +209,13 @@ private:
       }
 
       if (op == static_cast<uint16_t>(rfc::Opcode::ERROR)) {
-        // Error from server -> stop
+        // Error from server
+        if (awaiting_first_ && !fallback_tried_) {
+          if (!quiet_) std::fprintf(stderr, "TFTP: ERROR on option RRQ, falling back to plain RRQ\n");
+          start_rrq(false);
+          fallback_tried_ = true;
+          continue;
+        }
         eof_ = true;
         return false;
       }
@@ -236,12 +258,21 @@ private:
     }
 
     // Give up
+    if (awaiting_first_ && !fallback_tried_) {
+      if (!quiet_) std::fprintf(stderr, "TFTP: no response to option RRQ; falling back to plain RRQ\n");
+      start_rrq(false);
+      fallback_tried_ = true;
+      return recv_next_block();
+    }
     return false;
   }
 
   void retransmit_rrq() {
     rfc::OptionMap opts;
-    opts.emplace_back("blksize", std::to_string(blksize_));
+    if (rrq_with_options_) {
+      opts.emplace_back("blksize", std::to_string(blksize_));
+      opts.emplace_back("tsize", "0");
+    }
     auto pkt = rfc::encode_rrq(path_, "octet", opts);
     send_to_server(pkt);
   }
@@ -268,6 +299,8 @@ private:
   int sock_ = -1;
   struct sockaddr_storage server_addr_{};
   socklen_t server_addr_len_ = 0;
+  struct sockaddr_storage server_addr_init_{};
+  socklen_t server_addr_init_len_ = 0;
   bool have_tid_ = false;
 
   bool awaiting_first_ = true;
@@ -279,6 +312,10 @@ private:
   bool last_block_consumed_ = false;
   bool eof_ = false;
   std::optional<std::uint64_t> tsize_hint_{};
+
+  bool quiet_ = false;
+  bool rrq_with_options_ = true;
+  bool fallback_tried_ = false;
 };
 
 } // namespace
