@@ -17,6 +17,20 @@ static void print_usage(const char* prog) {
   std::fprintf(stderr, "usage: %s <URL-or-path> [--bytes N | --head N] [-q|--quiet]\n", prog);
 }
 
+static void print_help(const char* prog) {
+  std::cout
+    << "Usage: " << prog << " <URL-or-path> [--bytes N | --head N] [-q|--quiet]\n"
+    << "\nOptions:\n"
+    << "  --bytes N         Limit total bytes read to N\n"
+    << "  --head N          Read only the first N bytes\n"
+    << "  -q, --quiet       Suppress non-fatal diagnostics\n"
+    << "  -h, --help        Show this help and exit\n"
+    << "\nExamples:\n"
+    << "  " << prog << " ./README.md\n"
+    << "  " << prog << " tftp://127.0.0.1/test.txt\n"
+    << "  " << prog << " --head 16 tftp://127.0.0.1/test.txt\n";
+}
+
 static std::optional<std::uint64_t> parse_u64(std::string_view s) {
   if (s.empty()) return std::nullopt;
   std::uint64_t v = 0;
@@ -43,6 +57,9 @@ int main(int argc, char** argv) {
       opts.bytes_limit = *val;
     } else if (a == "-q" || a == "--quiet") {
       opts.quiet = true;
+    } else if (a == "-h" || a == "--help") {
+      print_help(argv[0]);
+      return 0;
     } else if (a.rfind("-", 0) == 0) {
       std::fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;
@@ -62,8 +79,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  /* Allocate a 64KB buffer */
   constexpr std::size_t kBufSize = 64 * 1024;
   std::vector<std::byte> buf(kBufSize);
+  /* Track emitted bytes */
   std::uint64_t emitted = 0;
 
   for (;;) {
